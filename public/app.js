@@ -5,6 +5,7 @@ const logsContainer = document.getElementById('logs-container');
 const btnCloseModal = document.getElementById('btn-close-modal');
 
 let servicesData = [];
+const actionInProgress = new Set();
 
 // Fetch and render services
 async function fetchServices() {
@@ -24,15 +25,21 @@ async function fetchServices() {
 
 // Start a service
 async function startService(id) {
+    if (actionInProgress.has(id)) return;
+    actionInProgress.add(id);
+    renderServices(servicesData); // Update UI immediately
     try {
         const res = await fetch(`/api/services/${id}/start`, { method: 'POST' });
         if (!res.ok) {
             const data = await res.json();
             console.error('Start failed:', data.error);
+            alert('Start failed: ' + data.error);
         }
-        fetchServices();
     } catch (err) {
         console.error(err);
+    } finally {
+        actionInProgress.delete(id);
+        fetchServices();
     }
 }
 
@@ -158,8 +165,8 @@ function renderServices(services) {
 
         const startBtn = document.createElement('button');
         startBtn.className = 'btn btn-primary';
-        startBtn.textContent = 'Start';
-        startBtn.disabled = isRunning;
+        startBtn.textContent = actionInProgress.has(service.id) ? 'Starting...' : 'Start';
+        startBtn.disabled = isRunning || actionInProgress.has(service.id);
         startBtn.addEventListener('click', () => startService(service.id));
 
         const stopBtn = document.createElement('button');
