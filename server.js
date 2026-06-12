@@ -27,7 +27,7 @@ if (fs.existsSync(PASSWORD_FILE)) {
     console.log('===================================================');
 }
 
-app.use((req, res, next) => {
+/* app.use((req, res, next) => {
     const b64auth = (req.headers.authorization || '').split(' ')[1] || '';
     const [user, pass] = Buffer.from(b64auth, 'base64').toString().split(':');
 
@@ -37,7 +37,7 @@ app.use((req, res, next) => {
 
     res.set('WWW-Authenticate', 'Basic realm="Service Manager"');
     res.status(401).send('Authentication required.');
-});
+}); */
 
 app.use(express.static(path.join(__dirname, 'public')));
 
