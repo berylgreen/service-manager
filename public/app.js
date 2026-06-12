@@ -67,6 +67,28 @@ async function viewLogs(id, name) {
     }
 }
 
+// Edit port
+async function editPort(id, currentPort) {
+    const newPort = prompt('Enter new port (changes will apply next time the service starts):', currentPort || '');
+    if (newPort && !isNaN(newPort) && newPort !== String(currentPort)) {
+        try {
+            const res = await fetch(`/api/services/${id}/port`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ port: parseInt(newPort) })
+            });
+            if (!res.ok) {
+                const data = await res.json();
+                console.error('Update port failed:', data.error);
+                alert('Update port failed: ' + data.error);
+            }
+            fetchServices();
+        } catch (err) {
+            console.error(err);
+        }
+    }
+}
+
 // Close Modal
 btnCloseModal.addEventListener('click', () => {
     modal.classList.remove('active');
@@ -151,9 +173,15 @@ function renderServices(services) {
         logsBtn.textContent = 'Logs';
         logsBtn.addEventListener('click', () => viewLogs(service.id, service.name));
 
+        const portBtn = document.createElement('button');
+        portBtn.className = 'btn';
+        portBtn.textContent = `Port: ${service.port || 'Edit'}`;
+        portBtn.addEventListener('click', () => editPort(service.id, service.port));
+
         actions.appendChild(startBtn);
         actions.appendChild(stopBtn);
         actions.appendChild(logsBtn);
+        actions.appendChild(portBtn);
 
         // Assemble
         card.appendChild(header);

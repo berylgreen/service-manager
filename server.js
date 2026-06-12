@@ -106,10 +106,37 @@ app.get('/api/services', async (req, res) => {
             id: service.id,
             name: service.name,
             url: service.url,
+            port: service.port,
             status: isRunning ? 'running' : 'stopped'
         });
     }
     res.json(result);
+});
+
+app.put('/api/services/:id/port', (req, res) => {
+    const id = req.params.id;
+    const { port } = req.body;
+    if (!port) return res.status(400).json({ error: 'Port is required' });
+
+    const services = getServices();
+    const service = services.find(s => s.id === id);
+    if (!service) return res.status(404).json({ error: 'Service not found' });
+
+    service.port = parseInt(port);
+    try {
+        const urlObj = new URL(service.url);
+        urlObj.port = service.port;
+        service.url = urlObj.toString().replace(/\/$/, "");
+    } catch (e) {
+        service.url = `http://localhost:${service.port}`;
+    }
+
+    try {
+        fs.writeFileSync(CONFIG_FILE, JSON.stringify(services, null, 2));
+        res.json({ message: 'Port updated successfully', service });
+    } catch (err) {
+        res.status(500).json({ error: 'Failed to save configuration' });
+    }
 });
 
 app.post('/api/services/:id/start', async (req, res) => {
@@ -124,7 +151,9 @@ app.post('/api/services/:id/start', async (req, res) => {
     if (service.stopCommand) {
         // Script-based execution
         appendLog(id, `> ${service.startCommand}`);
-        const child = exec(service.startCommand, { cwd: service.cwd });
+        const env = { ...process.env };
+        if (service.port) env.PORT = service.port;
+        const child = exec(service.startCommand, { cwd: service.cwd, env });
         
         child.stdout.on('data', data => data.toString().split('\n').forEach(l => appendLog(id, l)));
         child.stderr.on('data', data => data.toString().split('\n').forEach(l => appendLog(id, `[ERROR] ${l}`)));
@@ -144,7 +173,9 @@ app.post('/api/services/:id/start', async (req, res) => {
         const args = parts.slice(1);
 
         try {
-            const child = spawn(cmd, args, { cwd: service.cwd, shell: true });
+            const env = { ...process.env };
+            if (service.port) env.PORT = service.port;
+            const child = spawn(cmd, args, { cwd: service.cwd, shell: true, env });
 
             child.stdout.on('data', data => data.toString().split('\n').forEach(l => appendLog(id, l)));
             child.stderr.on('data', data => data.toString().split('\n').forEach(l => appendLog(id, `[ERROR] ${l}`)));
@@ -172,7 +203,9 @@ app.post('/api/services/:id/stop', (req, res) => {
     if (service.stopCommand) {
         appendLog(id, `--- Stopping ${service.name} ---`);
         appendLog(id, `> ${service.stopCommand}`);
-        const child = exec(service.stopCommand, { cwd: service.cwd });
+        const env = { ...process.env };
+        if (service.port) env.PORT = service.port;
+        const child = exec(service.stopCommand, { cwd: service.cwd, env });
         
         child.stdout.on('data', data => data.toString().split('\n').forEach(l => appendLog(id, l)));
         child.stderr.on('data', data => data.toString().split('\n').forEach(l => appendLog(id, `[ERROR] ${l}`)));
