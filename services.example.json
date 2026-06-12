@@ -1,0 +1,16 @@
+[
+  {
+    "id": "graded-reader",
+    "name": "Graded-Reader-GenAI",
+    "cwd": "/home/cc/server/Graded-Reader-GenAI",
+    "startCommand": "npm run dev",
+    "url": "http://localhost:3000"
+  },
+  {
+    "id": "java-exam-system",
+    "name": "Java Exam Paper System",
+    "cwd": "/home/cc/server/java-exam-paper-system",
+    "startCommand": "mvn spring-boot:run",
+    "url": "http://localhost:8080"
+  }
+]
