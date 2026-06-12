@@ -113,7 +113,7 @@ app.get('/api/services', async (req, res) => {
     res.json(result);
 });
 
-app.put('/api/services/:id/port', (req, res) => {
+app.put('/api/services/:id/port', async (req, res) => {
     const id = req.params.id;
     const { port } = req.body;
     if (!port) return res.status(400).json({ error: 'Port is required' });
@@ -121,6 +121,20 @@ app.put('/api/services/:id/port', (req, res) => {
     const services = getServices();
     const service = services.find(s => s.id === id);
     if (!service) return res.status(404).json({ error: 'Service not found' });
+
+    // Prevent changing port while running
+    let isRunning = false;
+    try {
+        const urlObj = new URL(service.url);
+        const p = parseInt(urlObj.port) || 80;
+        isRunning = await checkPort(p);
+    } catch (e) {
+        isRunning = processes.has(id);
+    }
+    
+    if (isRunning) {
+        return res.status(400).json({ error: 'Cannot change port while service is running. Please stop it first.' });
+    }
 
     service.port = parseInt(port);
     try {

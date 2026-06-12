@@ -183,6 +183,7 @@ function renderServices(services) {
         const portBtn = document.createElement('button');
         portBtn.className = 'btn';
         portBtn.textContent = `Port: ${service.port || 'Edit'}`;
+        portBtn.disabled = isRunning;
         portBtn.addEventListener('click', () => editPort(service.id, service.port));
 
         actions.appendChild(startBtn);
