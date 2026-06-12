@@ -2,8 +2,9 @@ const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
-const { spawn } = require('child_process');
+const { spawn, exec } = require('child_process');
 const crypto = require('crypto');
+const net = require('net');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -43,11 +44,11 @@ app.use(express.static(path.join(__dirname, 'public')));
 // Path to configuration
 const CONFIG_FILE = path.join(__dirname, 'services.json');
 
-// In-memory store for running processes and their logs
+// In-memory store for running processes (only used for non-script services)
 const processes = new Map();
+// Logs store
 const logs = new Map();
 
-// Helper to read configuration
 function getServices() {
     try {
         const data = fs.readFileSync(CONFIG_FILE, 'utf-8');
@@ -58,98 +59,140 @@ function getServices() {
     }
 }
 
-// API: Get all services
-app.get('/api/services', (req, res) => {
+// Utility to check if a port is open
+function checkPort(port) {
+    return new Promise((resolve) => {
+        const socket = new net.Socket();
+        socket.setTimeout(1000);
+        socket.on('connect', () => {
+            socket.destroy();
+            resolve(true);
+        });
+        socket.on('timeout', () => {
+            socket.destroy();
+            resolve(false);
+        });
+        socket.on('error', () => {
+            resolve(false);
+        });
+        socket.connect(port, '127.0.0.1');
+    });
+}
+
+function appendLog(id, text) {
+    if (!logs.has(id)) logs.set(id, []);
+    const currentLogs = logs.get(id);
+    currentLogs.push(text);
+    if (currentLogs.length > 2000) currentLogs.splice(0, currentLogs.length - 2000);
+}
+
+app.get('/api/services', async (req, res) => {
     const services = getServices();
-    const result = services.map(service => {
-        return {
+    const result = [];
+    
+    for (const service of services) {
+        let isRunning = false;
+        
+        try {
+            const urlObj = new URL(service.url);
+            const port = parseInt(urlObj.port) || (urlObj.protocol === 'https:' ? 443 : 80);
+            isRunning = await checkPort(port);
+        } catch (e) {
+            // Fallback to process map if URL is invalid
+            isRunning = processes.has(service.id);
+        }
+        
+        result.push({
             id: service.id,
             name: service.name,
             url: service.url,
-            status: processes.has(service.id) ? 'running' : 'stopped'
-        };
-    });
+            status: isRunning ? 'running' : 'stopped'
+        });
+    }
     res.json(result);
 });
 
-// API: Start a service
-app.post('/api/services/:id/start', (req, res) => {
+app.post('/api/services/:id/start', async (req, res) => {
     const id = req.params.id;
     const services = getServices();
     const service = services.find(s => s.id === id);
 
-    if (!service) {
-        return res.status(404).json({ error: 'Service not found' });
-    }
+    if (!service) return res.status(404).json({ error: 'Service not found' });
 
-    if (processes.has(id)) {
-        return res.status(400).json({ error: 'Service is already running' });
-    }
+    logs.set(id, [`--- Starting ${service.name} ---`]);
 
-    // Split command securely
-    const parts = service.startCommand.split(' ');
-    const cmd = parts[0];
-    const args = parts.slice(1);
-
-    // Initialize logs
-    logs.set(id, []);
-
-    try {
-        const child = spawn(cmd, args, { cwd: service.cwd, shell: true });
-
-        // Capture stdout
-        child.stdout.on('data', (data) => {
-            const lines = data.toString().split('\n');
-            const currentLogs = logs.get(id);
-            currentLogs.push(...lines);
-            // keep only last 1000 lines to prevent memory leak
-            if (currentLogs.length > 1000) currentLogs.splice(0, currentLogs.length - 1000);
+    if (service.stopCommand) {
+        // Script-based execution
+        appendLog(id, `> ${service.startCommand}`);
+        const child = exec(service.startCommand, { cwd: service.cwd });
+        
+        child.stdout.on('data', data => data.toString().split('\n').forEach(l => appendLog(id, l)));
+        child.stderr.on('data', data => data.toString().split('\n').forEach(l => appendLog(id, `[ERROR] ${l}`)));
+        
+        child.on('close', code => {
+            appendLog(id, `--- Start script exited with code ${code} ---`);
+            appendLog(id, `(Background processes may still be running. Checking port...)`);
         });
+        
+        return res.json({ message: 'Start script executed' });
+    } else {
+        // Process-based execution
+        if (processes.has(id)) return res.status(400).json({ error: 'Service is already running' });
+        
+        const parts = service.startCommand.split(' ');
+        const cmd = parts[0];
+        const args = parts.slice(1);
 
-        // Capture stderr
-        child.stderr.on('data', (data) => {
-            const lines = data.toString().split('\n');
-            const currentLogs = logs.get(id);
-            currentLogs.push(...lines.map(l => `[ERROR] ${l}`));
-            if (currentLogs.length > 1000) currentLogs.splice(0, currentLogs.length - 1000);
-        });
+        try {
+            const child = spawn(cmd, args, { cwd: service.cwd, shell: true });
 
-        child.on('close', (code) => {
-            console.log(`Service ${id} exited with code ${code}`);
-            processes.delete(id);
-            const currentLogs = logs.get(id);
-            if (currentLogs) currentLogs.push(`--- Service exited with code ${code} ---`);
-        });
+            child.stdout.on('data', data => data.toString().split('\n').forEach(l => appendLog(id, l)));
+            child.stderr.on('data', data => data.toString().split('\n').forEach(l => appendLog(id, `[ERROR] ${l}`)));
 
-        child.on('error', (err) => {
-            console.error(`Failed to start service ${id}:`, err);
-            processes.delete(id);
-            const currentLogs = logs.get(id);
-            if (currentLogs) currentLogs.push(`--- Failed to start: ${err.message} ---`);
-        });
+            child.on('close', code => {
+                processes.delete(id);
+                appendLog(id, `--- Service exited with code ${code} ---`);
+            });
 
-        processes.set(id, child);
-        res.json({ message: 'Service started successfully' });
-    } catch (err) {
-        res.status(500).json({ error: 'Failed to spawn process' });
+            processes.set(id, child);
+            return res.json({ message: 'Service started successfully' });
+        } catch (err) {
+            return res.status(500).json({ error: 'Failed to spawn process' });
+        }
     }
 });
 
-// API: Stop a service
 app.post('/api/services/:id/stop', (req, res) => {
     const id = req.params.id;
-    
-    if (!processes.has(id)) {
-        return res.status(400).json({ error: 'Service is not running' });
-    }
+    const services = getServices();
+    const service = services.find(s => s.id === id);
 
-    const child = processes.get(id);
-    child.kill('SIGTERM');
-    
-    res.json({ message: 'Stop signal sent' });
+    if (!service) return res.status(404).json({ error: 'Service not found' });
+
+    if (service.stopCommand) {
+        appendLog(id, `--- Stopping ${service.name} ---`);
+        appendLog(id, `> ${service.stopCommand}`);
+        const child = exec(service.stopCommand, { cwd: service.cwd });
+        
+        child.stdout.on('data', data => data.toString().split('\n').forEach(l => appendLog(id, l)));
+        child.stderr.on('data', data => data.toString().split('\n').forEach(l => appendLog(id, `[ERROR] ${l}`)));
+        
+        child.on('close', code => {
+            appendLog(id, `--- Stop script exited with code ${code} ---`);
+        });
+        
+        return res.json({ message: 'Stop script executed' });
+    } else {
+        if (!processes.has(id)) {
+            return res.status(400).json({ error: 'Process is not tracked (maybe already stopped?)' });
+        }
+        const child = processes.get(id);
+        child.kill('SIGTERM');
+        processes.delete(id);
+        return res.json({ message: 'Stop signal sent' });
+    }
 });
 
-// API: Get logs
 app.get('/api/services/:id/logs', (req, res) => {
     const id = req.params.id;
     const serviceLogs = logs.get(id) || [];
